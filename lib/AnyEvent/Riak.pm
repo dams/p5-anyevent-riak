@@ -332,10 +332,17 @@ sub set_bucket_type {
     croak "not implemented yet";
 }
 
+=for Pod::Coverage get_client_id
+
+=cut
 
 sub get_client_id {
     croak "deprecated since Riak 1.4";
 }
+
+=for Pod::Coverage set_client_id
+
+=cut
 
 sub set_client_id {
     croak "deprecated since Riak 1.4";
