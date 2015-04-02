@@ -2,7 +2,7 @@ package AnyEvent::Riak;
 
 # ABSTRACT: AnyEvent ProtocolBuffers Riak Client
 
-use 5.012;
+use 5.010;
 use strict;
 use warnings;
 use AnyEvent::Riak::PBC;
@@ -263,10 +263,10 @@ sub _run_cmd {
 
     $handle->push_read( chunk => 4, sub {
          my $len = unpack "N", $_[1];
-         $handle->timeout_reset;
+         $_[0]->timeout_reset;
          $_[0]->unshift_read( chunk => $len, sub {
-             $handle->timeout_reset;
-             $handle->timeout(0);
+             $_[0]->timeout_reset;
+             $_[0]->timeout(0);
              my ( $response_code, $response_body ) = unpack( 'c a*', $_[1] );
 
              if ($response_code == $message_codes->{RpbErrorResp}) {
