@@ -112,16 +112,6 @@ my $message_codes = {
 
   my $get_result = $cv3->recv();
 
-=head1 DOCUMENTATION
-
-The exhaustive documentation is here:
-
-L<AnyEvent::Riak::Documentation>
-
-However, the current module doesn't support all features documented. C<get()>
-and C<put()> works, the rest may work... The status of supported functions will
-be updated.
-
 =attr host => $hostname
 
 Str, Required. Riak IP or hostname. Default to 127.0.0.1
@@ -206,7 +196,10 @@ sub close {
     my ($self, $callback) = @_;
     defined $callback && ref($callback) eq 'CODE'
       or croak "last parameter must be a CoderRef callback";
-    $self->_handle->on_drain( sub { shutdown($_[0]{fh}, 1); $self->_clear_handle(); $callback->(); } )
+    $self->_handle->low_water_mark(0);
+    $self->_handle->on_drain( sub { shutdown($_[0]{fh}, 1); $callback->(); } );
+    $self->_clear_handle();
+    return;
 }
 
 # we don't want DESTROY to be autoloaded
@@ -219,13 +212,7 @@ sub AUTOLOAD {
   my $command = $AUTOLOAD;
   $command =~ s/.*://;
 
-  my $request_name  = 'Rpb' . ucfirst(_to_camel($command)) . 'Req';
-  my $response_name = 'Rpb' . ucfirst(_to_camel($command)) . 'Resp';
-  my $request_code  = $message_codes->{$request_name};
-  my $response_code = $message_codes->{$response_name};
-  defined $request_code && defined $response_code
-    or croak "unknown method '$command'";
-
+  my ($request_name, $request_code, $response_name, $response_code) = _command_to_req($command);
   my $method = sub { shift->_run_cmd($request_name, $request_code, $response_name, $response_code, @_) };
 
   # Save this method for future calls
@@ -233,6 +220,17 @@ sub AUTOLOAD {
   *$AUTOLOAD = $method;
 
   goto $method;
+}
+
+sub _command_to_req {
+    my ($command) = @_;
+    my $request_name  = 'Rpb' . ucfirst(_to_camel($command)) . 'Req';
+    my $response_name = 'Rpb' . ucfirst(_to_camel($command)) . 'Resp';
+    my $request_code  = $message_codes->{$request_name};
+    my $response_code = $message_codes->{$response_name};
+    defined $request_code && defined $response_code
+      or croak "unknown method '$command'";
+    return $request_name, $request_code, $response_name, $response_code;
 }
 
 sub _run_cmd {
@@ -261,7 +259,6 @@ sub _run_cmd {
     $handle->push_write(  pack('N', bytes::length($body) + 1)
                         . pack('c', $request_code) . $body
                        );
-
     $handle->timeout_reset;
 
     $handle->push_read( chunk => 4, sub {
@@ -277,7 +274,6 @@ sub _run_cmd {
                  return $callback->(undef, { error_code => $decoded_message->errcode,
                                              error_message => $decoded_message->errmsg });
              }
-
              if ($response_code != $expected_response_code) {
                  return $callback->(undef, {
                    error_code => -2,
@@ -285,8 +281,19 @@ sub _run_cmd {
                                     . "expected: '$expected_response_code')" });
              }
 
-             my ($ret, $more_to_come) = ( 1, );
-             my $result = $response_name->decode($response_body);
+             # my ($ret, $more_to_come) = ( 1, );
+
+             my $result;
+             if ($response_name) {
+                 $result = $response_name->decode($response_body);
+                 ref($result) eq $response_name
+                   or return $callback->(undef, {
+                     error_code => -2,
+                     error_message =>   "wrong response (got: '" . ref($result) . "', "
+                                      . "expected: '$response_name')" });
+             } else {
+                 $result = 1;
+             }
              return $callback->($result);
          });
      });
@@ -300,4 +307,845 @@ sub _to_camel {
     return $str;
 }
 
+
+
+# Now, some methods that are not generic
+
+sub set_bucket {
+    my ($request_name, $request_code, $response_name, $response_code) = _command_to_req('set_bucket');
+    shift->_run_cmd($request_name, $request_code, undef, $response_code, @_);
+}
+
+sub reset_bucket {
+    my ($request_name, $request_code, $response_name, $response_code) = _command_to_req('reset_bucket');
+    shift->_run_cmd($request_name, $request_code, undef, $response_code, @_);
+}
+
+sub get_bucket_type {
+    my $request_name = 'RpbGetBucketTypeReq';
+    my $response_name = 'RpbGetBucketResp';
+    shift->_run_cmd($request_name, $message_codes->{$request_name},
+                    $response_name, $message_codes->{$response_name}, @_);
+}
+
+sub set_bucket_type {
+    croak "not implemented yet";
+}
+
+
+sub get_client_id {
+    croak "deprecated since Riak 1.4";
+}
+
+sub set_client_id {
+    croak "deprecated since Riak 1.4";
+}
+
+=method get_bucket
+
+Get bucket properties request.
+
+=over
+
+=item bucket
+
+required, string
+
+=item type
+
+optional, string
+
+=back
+
+=method set_bucket
+
+Set bucket properties request
+
+=over
+
+=item bucket
+
+required, string
+
+=item props
+
+required, RpbBucketProps
+
+=item type
+
+optional, string
+
+=back
+
+=method reset_bucket
+
+Reset bucket properties request
+
+=over
+
+=item bucket
+
+required, string
+
+=item type
+
+optional, string
+
+=back
+
+=method get_bucket_type
+
+Get bucket properties request
+
+=over
+
+=item type
+
+required, string
+
+=back
+
+=method set_bucket_type
+
+Set bucket properties request
+
+=over
+
+=item type
+
+required, string
+
+=item props
+
+required, RpbBucketProps
+
+=back
+
+=begin NOT_IMPLEMENTED
+
+=method auth
+
+Authentication request
+
+=over
+
+=item user
+
+required, string
+
+=item password
+
+required, string
+
+=back
+
+=method set_client_id
+
+=over
+
+=item client_id
+
+required, string
+
+Client id to use for this connection
+
+=back
+
+=end NOT_IMPLEMENTED
+
+=method get
+
+Get Request - retrieve bucket/key
+
+=over
+
+=item bucket
+
+required, string
+
+=item key
+
+required, string
+
+=item r
+
+optional, number
+
+=item pr
+
+optional, number
+
+=item basic_quorum
+
+optional, boolean
+
+=item notfound_ok
+
+optional, boolean
+
+=item if_modified
+
+optional, string
+
+fail if the supplied vclock does not match
+
+=item head
+
+optional, boolean
+
+return everything but the value
+
+=item deletedvclock
+
+optional, boolean
+
+return the tombstone's vclock, if applicable
+
+=item timeout
+
+optional, number
+
+=item sloppy_quorum
+
+optional, boolean
+
+Experimental, may change/disappear
+
+=item n_val
+
+optional, number
+
+Experimental, may change/disappear
+
+=item type
+
+optional, string
+
+Bucket type, if not set we assume the 'default' type
+
+=back
+
+=method put
+
+Put request - if options.return_body is set then the updated metadata/data for the key will be returned.
+
+=over
+
+=item bucket
+
+required, string
+
+=item key
+
+optional, string
+
+=item vclock
+
+optional, string
+
+=item content
+
+required, RpbContent
+
+=item w
+
+optional, number
+
+=item dw
+
+optional, number
+
+=item return_body
+
+optional, boolean
+
+=item pw
+
+optional, number
+
+=item if_not_modified
+
+optional, boolean
+
+=item if_none_match
+
+optional, boolean
+
+=item return_head
+
+optional, boolean
+
+=item timeout
+
+optional, number
+
+=item asis
+
+optional, boolean
+
+=item sloppy_quorum
+
+optional, boolean
+
+Experimental, may change/disappear
+
+=item n_val
+
+optional, number
+
+Experimental, may change/disappear
+
+=item type
+
+optional, string
+
+Bucket type, if not set we assume the 'default' type
+
+=back
+
+=begin NOT_IMPLEMENTED
+
+=method del
+
+Delete request
+
+=over
+
+=item bucket
+
+required, string
+
+=item key
+
+required, string
+
+=item rw
+
+optional, number
+
+=item vclock
+
+optional, string
+
+=item r
+
+optional, number
+
+=item w
+
+optional, number
+
+=item pr
+
+optional, number
+
+=item pw
+
+optional, number
+
+=item dw
+
+optional, number
+
+=item timeout
+
+optional, number
+
+=item sloppy_quorum
+
+optional, boolean
+
+Experimental, may change/disappear
+
+=item n_val
+
+optional, number
+
+Experimental, may change/disappear
+
+=item type
+
+optional, string
+
+Bucket type, if not set we assume the 'default' type
+
+=back
+
+=method list_buckets
+
+List buckets request 
+
+=over
+
+=item timeout
+
+optional, number
+
+=item stream
+
+optional, boolean
+
+=item type
+
+optional, string
+
+Bucket type, if not set we assume the 'default' type
+
+=back
+
+=method list_keys
+
+List keys in bucket request
+
+=over
+
+=item bucket
+
+required, string
+
+=item timeout
+
+optional, number
+
+=item type
+
+optional, string
+
+Bucket type, if not set we assume the 'default' type
+
+=back
+
+=method map_red
+
+Map/Reduce request
+
+=over
+
+=item request
+
+required, string
+
+=item content_type
+
+required, string
+
+=back
+
+=method index
+
+Secondary Index query request
+
+=over
+
+=item bucket
+
+required, string
+
+=item index
+
+required, string
+
+=item qtype
+
+required, one of 'eq', 'range'
+
+=item key
+
+optional, string
+
+key here means equals value for index?
+
+=item range_min
+
+optional, string
+
+=item range_max
+
+optional, string
+
+=item return_terms
+
+optional, boolean
+
+=item stream
+
+optional, boolean
+
+=item max_results
+
+optional, number
+
+=item continuation
+
+optional, string
+
+=item timeout
+
+optional, number
+
+=item type
+
+optional, string
+
+Bucket type, if not set we assume the 'default' type
+
+=item term_regex
+
+optional, string
+
+=item pagination_sort
+
+optional, boolean
+
+Whether to use pagination sort for non-paginated queries=back
+
+=method CS_bucket
+
+ added solely for riak_cs currently for folding over a bucket and returning objects.
+
+=over
+
+=item bucket
+
+required, string
+
+=item start_key
+
+required, string
+
+=item end_key
+
+optional, string
+
+=item start_incl
+
+optional, boolean
+
+=item end_incl
+
+optional, boolean
+
+=item continuation
+
+optional, string
+
+=item max_results
+
+optional, number
+
+=item timeout
+
+optional, number
+
+=item type
+
+optional, string
+
+Bucket type, if not set we assume the 'default' type
+
+=back
+
+=method counter_update
+
+Counter update request
+
+=over
+
+=item bucket
+
+required, string
+
+=item key
+
+required, string
+
+=item amount
+
+required, sint64
+
+=item w
+
+optional, number
+
+=item dw
+
+optional, number
+
+=item pw
+
+optional, number
+
+=item returnvalue
+
+optional, boolean
+
+=back
+
+=method counter_get
+
+ counter value
+
+=over
+
+=item bucket
+
+required, string
+
+=item key
+
+required, string
+
+=item r
+
+optional, number
+
+=item pr
+
+optional, number
+
+=item basic_quorum
+
+optional, boolean
+
+=item notfound_ok
+
+optional, boolean
+
+=back
+
+=end NOT_IMPLEMENTED
+
+=head1 RESPONSE OBJECTS
+
+Results returned from various methods are blessed response objects from the
+following types. Their attributes can be accessed using accessors (of the same
+name), or using the response as a HashRef.
+
+=head2 RpbErrorResp
+
+Error response - may be generated for any Req
+
+=over
+
+=item errmsg
+
+required, string
+
+=item errcode
+
+required, number
+
+=back
+
+=head2 RpbGetServerInfoResp
+
+Get server info request - no message defined, just send RpbGetServerInfoReq message code
+
+=over
+
+=item node
+
+optional, string
+
+=item server_version
+
+optional, string
+
+=back
+
+=head2 RpbGetBucketResp
+
+Get bucket properties response
+
+=over
+
+=item props
+
+required, RpbBucketProps
+
+=back
+
+=head2 RpbGetClientIdResp
+
+Get ClientId Request - no message defined, just send RpbGetClientIdReq message code
+
+=over
+
+=item client_id
+
+required, string
+
+Client id in use for this connection
+
+=back
+
+=head2 RpbGetResp
+
+Get Response - if the record was not found there will be no content/vclock
+
+=over
+
+=item content
+
+repeated, RpbContent
+
+=item vclock
+
+optional, string
+
+the opaque vector clock for the object
+
+=item unchanged
+
+optional, boolean
+
+=back
+
+=head2 RpbPutResp
+
+Put response - same as get response with optional key if one was generated
+
+=over
+
+=item content
+
+repeated, RpbContent
+
+=item vclock
+
+optional, string
+
+the opaque vector clock for the object
+
+=item key
+
+optional, string
+
+the key generated, if any
+
+=back
+
+=head2 RpbListBucketsResp
+
+List buckets response - one or more of these packets will be sent the last one will have done set true (and may not have any buckets in it)
+
+=over
+
+=item buckets
+
+repeated, string
+
+=item done
+
+optional, boolean
+
+=back
+
+=head2 RpbListKeysResp
+
+List keys in bucket response - one or more of these packets will be sent the last one will have done set true (and may not have any keys in it)
+
+=over
+
+=item keys
+
+repeated, string
+
+=item done
+
+optional, boolean
+
+=back
+
+=head2 RpbMapRedResp
+
+Map/Reduce response one or more of these packets will be sent the last one will have done set true (and may not have phase/data in it)
+
+=over
+
+=item phase
+
+optional, number
+
+=item response
+
+optional, string
+
+=item done
+
+optional, boolean
+
+=back
+
+=head2 RpbIndexResp
+
+Secondary Index query response
+
+=over
+
+=item keys
+
+repeated, string
+
+=item results
+
+repeated, RpbPair
+
+=item continuation
+
+optional, string
+
+=item done
+
+optional, boolean
+
+=back
+
+=head2 RpbCSBucketResp
+
+ return for CS bucket fold
+
+=over
+
+=item objects
+
+repeated, RpbIndexObject
+
+=item continuation
+
+optional, string
+
+=item done
+
+optional, boolean
+
+=back
+
+=head2 RpbCounterUpdateResp
+
+Counter update response? No message | error response
+
+=over
+
+=item value
+
+optional, sint64
+
+=back
+
+=head2 RpbCounterGetResp
+
+Counter value response
+
+=over
+
+=item value
+
+optional, sint64
+
+=back
+
+=cut
+
 1;
+
