@@ -144,6 +144,19 @@ Boolean, Default 0. If set to a true value, TCP_NODELAY will be enabled on the
 socket, which means deactivating Nagle's algorithm. Use only if you know what
 you're doing.
 
+=attr keepalive => <boolean>
+
+Boolean, Default 0. If set to true, SO_KEEPALIVE socket option would be enabled.
+In a nutshell, using tcp keepalive allows one to detect a broken/hanging
+connections as keepalive mechanism would send a probe packet to the connection peer
+and once it failes to send the packet tcp_keepalive_probes times, the connection
+is considered to be broken.
+The actual keepalive values depend on your system settings:
+sysctl \
+net.ipv4.tcp_keepalive_time \
+net.ipv4.tcp_keepalive_intvl \
+net.ipv4.tcp_keepalive_probes
+
 =cut
 
 has host                => ( is => 'ro', isa => Str,  default => sub { '127.0.0.1'} );
@@ -153,6 +166,7 @@ has on_connect_error    => ( is => 'ro', isa => CodeRef,  required => 1 );
 has connect_timeout     => ( is => 'ro', isa => Num,  default  => sub {5} );
 has timeout             => ( is => 'ro', isa => Num,  default  => sub {5} );
 has no_delay            => ( is => 'ro', isa => Bool, default  => sub {0} );
+has keepalive           => ( is => 'ro', isa => Bool, default  => sub {0} );
 
 has _handle => ( is => 'ro', lazy => 1, clearer => 1, builder => sub {
     my ($self) = @_;
@@ -162,10 +176,12 @@ has _handle => ( is => 'ro', lazy => 1, clearer => 1, builder => sub {
     my $on_connect_error = $self->on_connect_error;
     my $c_timeout = $self->connect_timeout;
     my $no_delay = $self->no_delay;
+    my $keepalive = $self->keepalive;
 
     AnyEvent::Handle->new (
       connect  => [$host, $port],
       no_delay => $no_delay,
+      keepalive => $keepalive,
       on_connect => $on_connect,
       on_connect_error => $on_connect_error,
       on_prepare => sub { $c_timeout },
